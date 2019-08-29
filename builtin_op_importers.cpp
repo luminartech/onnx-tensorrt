@@ -35,6 +35,8 @@ namespace onnx2trt {
 
 namespace {
 
+using std::flush;
+
 enum { BATCH_DIM = 0 };
 
 // Returns false if the transpose does not require any data movement (i.e., it's equivalent to a reshape)
@@ -437,7 +439,9 @@ bool registerBuiltinOpImporter(std::string op,
 #define RETURN_FIRST_OUTPUT(layer) do { \
   nvinfer1::ILayer* layer_ptr = layer; \
   ASSERT(layer_ptr != nullptr, ErrorCode::kUNSUPPORTED_NODE); \
-  return {{layer_ptr->getOutput(0)}}; \
+  auto output0 = layer_ptr->getOutput(0); \
+  std::cout << "***** debug outdims: " << output0->getDimensions() << std::endl; \
+  return {{output0}}; \
 } while(0)
 
 #define RETURN_IDENTITY(input) do { \
@@ -682,22 +686,106 @@ DEFINE_BUILTIN_OP_IMPORTER(Clip) {
 
 DEFINE_BUILTIN_OP_IMPORTER(Concat) {
   std::vector<nvinfer1::ITensor*> tensors;
+  // AP SCAFFOLD - not checking all input tensor types match
+  std::set<int> seenDims;
   for( auto& input : inputs ) {
+    cout << " is_weights = " << input.is_weights() << endl;
+    ASSERT(input.is_tensor() || input.is_weights(), ErrorCode::kUNSUPPORTED_NODE);
+    if (input.is_tensor()) {
+      cout << "*** concat tensor type= " << input.tensor().getType() << endl;
+      cout << "*** concat tensor Dims=" << input.tensor().getDimensions() << endl;
+    } else {
+      cout << "*** concat weights type=" << input.weights().type << endl;
+      cout << "*** concat weights shape=" << input.weights().shape << endl;
+    }
 #if NV_TENSORRT_MAJOR >= 4
-    ASSERT(input.is_tensor() && input.tensor().getType() != nvinfer1::DataType::kINT32,
-           ErrorCode::kUNSUPPORTED_NODE);
+    // AP SCAFFOLD - why this limitation?
+    //ASSERT(input.is_tensor() && input.tensor().getType() != nvinfer1::DataType::kINT32,
+    //       ErrorCode::kUNSUPPORTED_NODE);
 #endif // NV_TENSORRT_MAJOR >= 4
+    cout << "  *** converting arg " << endl;
     tensors.push_back(&convertToTensor(input, ctx));
+    cout << "   *** done converting arg " << endl;
+    seenDims.insert(tensors.back()->getDimensions().nbDims);
   }
+  if (seenDims.size() > 1) {
+    cout << "Error: concat tensor dimensions differ" << endl;
+  }
+  cout << "  *** Done converting inputs" << endl;
   OnnxAttrs attrs(node);
   int nbDims = inputs.at(0).shape().nbDims;
   int axis = attrs.get<int>("axis");
-  TRT_CHECK(convert_axis(axis, nbDims));
+  cout << "*** concat axis = " << axis << endl;
+  // AP SCAFFOLD
+  if (inputs[0].is_tensor() && inputs[0].tensor().getType() != nvinfer1::DataType::kINT32) {
+    TRT_CHECK(convert_axis(axis, nbDims)); // AP SCAFFOLD - try not converting for indices
+  }
+
   auto* layer = ctx->network()->addConcatenation(tensors.data(), tensors.size());
   ASSERT(layer, ErrorCode::kUNSUPPORTED_NODE);
   layer->setAxis(axis);
+  cout << "Returning from Concat..." << endl;
   RETURN_FIRST_OUTPUT(layer);
 }
+
+
+/*
+ConstantOfShape
+  Generate a tensor with given value and shape.
+
+ATTRIBUTES
+value: tensor
+  (Optional) The value of the output elements.Should be a one-element tensor.
+  If not specified, it defaults to a tensor of value 0 and datatype float32
+
+INPUTS
+input: T1
+  1D tensor. The shape of the expected output tensor. If empty tensor is given,
+  the output would be a scalar.
+
+OUTPUTS
+output: T2
+  Output tensor of shape specified by 'input'.If attribute 'value' is specified,
+  the value and datatype of the output tensor is taken from 'value'.
+  If attribute 'value' is not specified, the value in the output defaults to 0,
+  and the datatype defaults to float32.
+*/
+#if 0
+// AP SCAFFOLD - problem with this is we need to read value out of a tensor...
+DEFINE_BUILTIN_OP_IMPORTER(ConstantOfShape) {
+  OnnxAttrs attrs(node);
+  auto val = attrs.get<ShapedWeights>("value");
+  // AP SCAFFOLD need to check that shape of value is (1)
+  cout << "*** ConstantOfShape val shape=" << val.shape << endl;
+  ASSERT(inputs.at(0).is_tensor(), ErrorCode::kUNSUPPORTED_NODE);
+  inputs.at(0)
+
+  nvinfer1::ITensor* target_shape = &convertToTensor(inputs.at(0), ctx);
+  ASSERT(target_shape->getNbDimensions() == 1, ErrorCode::kUNSUPPORTED_NODE);
+  // need to convert target_shape values to Dimensions to pass into addConstantLayer
+
+    nvinfer1::Dims weight_dims;
+    weight_dims.nbDims = target_shape->getDimensions().d[0];
+    // AP SCAFFOLD - check for max dims
+    for (int i = 0; i < weight_dims.nbDims; i++)
+    {
+      weight_dims.d[i] = target_shape->;
+    }
+    cout << "##### in Shape, weight_dims=" << weight_dims << endl;
+    // Note: Should technically be int64, but int32 allows for TRT compatibility
+    auto weights = ctx->createTempWeights(
+        ::ONNX_NAMESPACE::TensorProto::INT32, weight_dims);
+    std::copy(&shape.d[0], &shape.d[0] + shape.nbDims,
+              static_cast<int32_t*>(const_cast<void*>(weights.values)));
+ 
+
+  auto result = ctx->createTempWeights(val.type, target_shape->getDimensions());
+  cout << "*** ConstantOfShape Dims of inputs[0]=" << target_shape->getDimensions();
+  auto* layer = ctx->network->addConstantLayer();
+  nvinfer1::ITensor* retval = &convertToTensor(*result, ctx);
+  return {{retval}};
+}
+#endif
 
 DEFINE_BUILTIN_OP_IMPORTER(Constant) {
   // TODO: This silently fails if the dtype is not supported
@@ -977,7 +1065,13 @@ DEFINE_BUILTIN_OP_IMPORTER(Gather) {
     OnnxAttrs attrs(node);
     int axis = attrs.get<int>("axis", 0);
     int nbDims = inputs.at(0).shape().nbDims;
+    cout << "**** Gather data.shape=" << data.getDimensions() << endl;
+    cout << "**** Gather axis, nbDims=" << axis << " " << nbDims << endl;
+
+    // AP SCAFFOLD - sometimes axis conversion is necessary
     TRT_CHECK(convert_axis(axis, nbDims));
+    // AP SCAFFOLD - input data is a tensor shape, not a tensor
+    // So axis conversion doesn't apply
     RETURN_FIRST_OUTPUT(ctx->network()->addGather(data, indices, axis));
 }
 #endif // NV_TENSORRT_MAJOR >= 4
@@ -1607,18 +1701,25 @@ DEFINE_BUILTIN_OP_IMPORTER(Selu) {
 }
 
 DEFINE_BUILTIN_OP_IMPORTER(Shape) {
+  cout << "##### in Shape" << endl;
   auto shape = inputs.at(0).shape();
   if( inputs.at(0).is_tensor() ) {
-    shape = insert_dim(shape, BATCH_DIM, -1);
+    shape = insert_dim(shape, BATCH_DIM, 1);
   }
+  cout << "##### in Shape, after insert_dim" << shape << endl;
   nvinfer1::Dims weight_dims;
   weight_dims.nbDims = 1;
   weight_dims.d[0] = shape.nbDims;
+  cout << "##### in Shape, weight_dims=" << weight_dims << endl;
   // Note: Should technically be int64, but int32 allows for TRT compatibility
   auto weights = ctx->createTempWeights(
       ::ONNX_NAMESPACE::TensorProto::INT32, weight_dims);
   std::copy(&shape.d[0], &shape.d[0] + shape.nbDims,
             static_cast<int32_t*>(const_cast<void*>(weights.values)));
+  cout << "##### in Shape, out shape = " << weights.shape << endl;
+  cout << "##### in Shape, out values[0] = " << ((int32_t*)weights.values)[0] << endl;
+  cout << "##### in Shape, out values[1] = " << ((int32_t*)weights.values)[1] << endl;
+  cout << "##### in Shape, out values[2] = " << ((int32_t*)weights.values)[2] << endl;
   return {{weights}};
 }
 
@@ -1659,6 +1760,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
   const auto starts = attrs.get<std::vector<int64_t>>("starts");
   const auto ends = attrs.get<std::vector<int64_t>>("ends");
   auto axes = attrs.get<std::vector<int64_t>>("axes");
+  cout << "*** Slice tensor dims: " << tensor.getDimensions() << endl << flush;
   // If axes are empty, follow the ONNX spec and populate it with [0, 1, ..., len(starts) - 1]
   if (axes.size() == 0)
   {
@@ -1679,6 +1781,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
   nvinfer1::Dims sliceStart = makeDims(0);
   nvinfer1::Dims sliceSize = dims;
   const nvinfer1::Dims sliceStride = makeDims(1); // ONNX has no support for strides in Slice
+
   for (size_t i = 0; i < axes.size(); i++){
     int axis = axes[i];
     if (axis == 0) {
@@ -1694,6 +1797,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
     int end = ends[i] >= 0 ? ends[i] : dim + ends[i];
     sliceStart.d[axis] = start;
     sliceSize.d[axis] = end < dim ? end - start : dim - start;
+    std::cout << "*** slice: axis = " << axis << std::endl;
   }
 
   // If entire slice op was a no-op, simply return the input tensor
@@ -1701,6 +1805,13 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
   {
     return {{&tensor}};
   }
+  std::cout << "*** slice: start=" << sliceStart << std::endl;
+  if (sliceSize.d[0] == -2) {
+    cout << "debug here" << endl;
+  }
+  std::cout << "*** slice: size=" << sliceSize << std::endl;
+  std::cout << "*** slice: stride=" << sliceStride << std::endl;
+  std::cout << "*** tensor dims=" << tensor.getDimensions() << std::endl;
   RETURN_FIRST_OUTPUT(ctx->network()->addSlice(tensor, sliceStart, sliceSize, sliceStride));
 }
 
@@ -1823,6 +1934,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Squeeze) {
   OnnxAttrs attrs(node);
   auto axes = attrs.get<std::vector<int>>("axes");
   // Note: Can't handle batch dim as it is implicit in TRT
+  if (0) // AP SCAFFOLD
   for( auto& axis : axes ) {
     TRT_CHECK(convert_axis(axis, ndim_in));
   }
@@ -1936,14 +2048,24 @@ DEFINE_BUILTIN_OP_IMPORTER(Unsqueeze) {
   int ndim_in = old_shape.nbDims;
   OnnxAttrs attrs(node);
   auto axes = attrs.get<std::vector<int>>("axes");
+
+  // AP SCAFFOLD: temp hack return the input
+  return {{inputs.at(0)}};
+
   // If the input was already a tensor, then we're dealing with a TRT shape,
   // so subtract 1 from the axes. Otherwise, this is an ONNX shape.
+  cout << "*** unsq Tensor dims=" << tensor.getDimensions() << endl;
+  cout << "*** unsq axes count=" << axes.size() << endl;
   if (inputs.at(0).is_tensor())
   {
       for (auto& axis : axes)
       {
-          ASSERT(axis != BATCH_DIM, ErrorCode::kUNSUPPORTED_NODE);
-          --axis;
+          cout << "***** unsq axis=" << axis << endl;
+          if (1) // AP SCAFFOLD - this is a shape, so no batch dim adjustment needed
+          {
+            ASSERT(axis != BATCH_DIM, ErrorCode::kUNSUPPORTED_NODE);
+            --axis;
+          }
       }
   }
 

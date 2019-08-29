@@ -357,6 +357,15 @@ inline nvinfer1::ITensor& convertToTensor(TensorOrWeights& input, IImporterConte
     {
         // Handle non-tensor indices input by adding a new constant layer to the network.
         const ShapedWeights& weights = input.weights();
+        if (weights.shape.d[0] == 1 && weights.shape.nbDims > 1) {
+          // AP SCAFFOLD: hack, try to detect batch=1
+          ShapedWeights* w = (ShapedWeights*)(&weights);
+          for (int iDim = 1; iDim < weights.shape.nbDims; iDim++) {
+            w->shape.d[iDim-1] = w->shape.d[iDim];
+          }
+          w->shape.nbDims--;
+          cout << " ++++ Weights shape after fixup =" << weights.shape << endl;
+        }
         return *(ctx->network()->addConstant(weights.shape, weights)->getOutput(0));
     }
 

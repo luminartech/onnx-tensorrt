@@ -548,9 +548,11 @@ ModelImporter::importModel(::ONNX_NAMESPACE::ModelProto const &model,
     _current_node = node_idx;
     ::ONNX_NAMESPACE::NodeProto const& node = graph.node(node_idx);
     std::vector<TensorOrWeights> inputs;
+    cout << "============ Importing node " << node_idx << endl << std::flush;
     for( auto const& input_name : node.input() ) {
       ASSERT(tensors.count(input_name), ErrorCode::kINVALID_GRAPH);
       inputs.push_back(tensors.at(input_name));
+      cout << " ++++ Input name = " << input_name << endl << std::flush;
     }
     std::vector<TensorOrWeights> outputs;
     GET_VALUE(this->importNode(node, inputs, output_names), &outputs);
