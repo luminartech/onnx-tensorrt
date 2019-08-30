@@ -2097,7 +2097,22 @@ DEFINE_BUILTIN_OP_IMPORTER(Unsqueeze) {
 
 DEFINE_BUILTIN_OP_IMPORTER(Upsample) {
   nvinfer1::ITensor &tensor = convertToTensor(inputs.at(0), ctx);
-  ASSERT(tensor.getDimensions().nbDims == 3, ErrorCode::kUNSUPPORTED_NODE);
+  auto inDims = tensor.getDimensions();
+  ASSERT(inDims.nbDims == 3, ErrorCode::kUNSUPPORTED_NODE);
+  if (0) {
+    // AP SCAFFOLD - this is weird a tensor is coming in with
+    // dimension types unset
+    inDims.type[0] = nvinfer1::DimensionType::kCHANNEL;
+    inDims.type[1] = nvinfer1::DimensionType::kSPATIAL;
+    inDims.type[2] = nvinfer1::DimensionType::kSPATIAL;
+    inputs.at(0).tensor().setDimensions(inDims);
+    auto dims1 = inputs.at(0).tensor().getDimensions();
+    ASSERT(dims1.nbDims == 3 &&
+          dims1.type[0] == nvinfer1::DimensionType::kCHANNEL &&
+          dims1.type[1] == nvinfer1::DimensionType::kSPATIAL &&
+          dims1.type[2] == nvinfer1::DimensionType::kSPATIAL,
+          ErrorCode::kUNSUPPORTED_NODE);
+  }
   OnnxAttrs attrs(node);
   float height_scale, width_scale;
   if (ctx->getOpsetVersion() >= 9) {

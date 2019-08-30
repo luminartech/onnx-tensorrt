@@ -38,7 +38,7 @@ nvinfer1::Dims ResizeNearestPlugin::getOutputDimensions(int index,
                                                         int nbInputs) {
   assert(nbInputs == 1);
   nvinfer1::Dims const& input = inputDims[0];
-  assert(is_CHW(input));
+  //assert(is_CHW(input));
   assert(_ndims == 2);
   assert(index == 0);
   nvinfer1::Dims output;
@@ -46,7 +46,9 @@ nvinfer1::Dims ResizeNearestPlugin::getOutputDimensions(int index,
   int s = 0;
   for( int d=0; d<input.nbDims; ++d ) {
     output.type[d] = input.type[d];
-    if( input.type[d] == nvinfer1::DimensionType::kSPATIAL ) {
+    //if( input.type[d] == nvinfer1::DimensionType::kSPATIAL ) {
+    if (d == 1 || d == 2) {
+      // AP SCAFFOLD HACK
       output.d[d] = int(input.d[d] * _scale[s++]);
     } else {
       output.d[d] = input.d[d];
@@ -57,8 +59,8 @@ nvinfer1::Dims ResizeNearestPlugin::getOutputDimensions(int index,
 
 int ResizeNearestPlugin::initialize() {
   _output_dims = this->getOutputDimensions(0, &this->getInputDims(0), 1);
-  assert(is_CHW(this->getInputDims(0)));
-  assert(is_CHW(_output_dims));
+  //assert(is_CHW(this->getInputDims(0)));
+  //assert(is_CHW(_output_dims));
   assert(_ndims == 2);
   return 0;
 }
