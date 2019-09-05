@@ -689,7 +689,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Concat) {
   // AP SCAFFOLD - not checking all input tensor types match
   std::set<int> seenDims;
   for( auto& input : inputs ) {
-    cout << " is_weights = " << input.is_weights() << endl;
+    cout << "*** concat input is_weights = " << input.is_weights() << endl;
     ASSERT(input.is_tensor() || input.is_weights(), ErrorCode::kUNSUPPORTED_NODE);
     if (input.is_tensor()) {
       cout << "*** concat tensor type= " << input.tensor().getType() << endl;
@@ -699,19 +699,18 @@ DEFINE_BUILTIN_OP_IMPORTER(Concat) {
       cout << "*** concat weights shape=" << input.weights().shape << endl;
     }
 #if NV_TENSORRT_MAJOR >= 4
-    // AP SCAFFOLD - why this limitation?
+    // AP SCAFFOLD - why this limitation? disabled the below assert
     //ASSERT(input.is_tensor() && input.tensor().getType() != nvinfer1::DataType::kINT32,
     //       ErrorCode::kUNSUPPORTED_NODE);
 #endif // NV_TENSORRT_MAJOR >= 4
-    cout << "  *** converting arg " << endl;
     tensors.push_back(&convertToTensor(input, ctx));
-    cout << "   *** done converting arg " << endl;
     seenDims.insert(tensors.back()->getDimensions().nbDims);
+    cout << "*** concat done converting arg " << endl;
   }
   if (seenDims.size() > 1) {
     cout << "Error: concat tensor dimensions differ" << endl;
   }
-  cout << "  *** Done converting inputs" << endl;
+  cout << "*** concat done converting inputs" << endl;
   OnnxAttrs attrs(node);
   int nbDims = inputs.at(0).shape().nbDims;
   int axis = attrs.get<int>("axis");
@@ -724,7 +723,6 @@ DEFINE_BUILTIN_OP_IMPORTER(Concat) {
   auto* layer = ctx->network()->addConcatenation(tensors.data(), tensors.size());
   ASSERT(layer, ErrorCode::kUNSUPPORTED_NODE);
   layer->setAxis(axis);
-  cout << "Returning from Concat..." << endl;
   RETURN_FIRST_OUTPUT(layer);
 }
 
@@ -751,7 +749,11 @@ output: T2
   and the datatype defaults to float32.
 */
 #if 0
-// AP SCAFFOLD - problem with this is we need to read value out of a tensor...
+// AP SCAFFOLD - there's a big problem with this is we need to read value out of a tensor...
+// So it's going to be slow and we need to go from device back to host,
+// And then create a new tensor with variable shape
+// Shape variability presents a big issue since we need to split into a dynamic engine
+// Which is not currently supported by TRT AFAIKT
 DEFINE_BUILTIN_OP_IMPORTER(ConstantOfShape) {
   OnnxAttrs attrs(node);
   auto val = attrs.get<ShapedWeights>("value");
@@ -1782,6 +1784,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
   nvinfer1::Dims sliceSize = dims;
   const nvinfer1::Dims sliceStride = makeDims(1); // ONNX has no support for strides in Slice
 
+  const uint64_t m1 = 0x7FFFffffFFFFffffUL;
   for (size_t i = 0; i < axes.size(); i++){
     int axis = axes[i];
     if (axis == 0) {
@@ -1794,7 +1797,11 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
     TRT_CHECK(convert_axis(axis, nbDims));
     int dim = dims.d[axis];
     int start = starts[i] >= 0 ? starts[i] : dim + starts[i];
-    int end = ends[i] >= 0 ? ends[i] : dim + ends[i];
+    int end = ends[i];
+    if (ends[i] < 0)
+      end = dim + ends[i];
+    else if (ends[i] == m1)
+      end = dim; // for the case of [1:] end is exported as m1
     sliceStart.d[axis] = start;
     sliceSize.d[axis] = end < dim ? end - start : dim - start;
     std::cout << "*** slice: axis = " << axis << std::endl;
@@ -1806,8 +1813,12 @@ DEFINE_BUILTIN_OP_IMPORTER(Slice) {
     return {{&tensor}};
   }
   std::cout << "*** slice: start=" << sliceStart << std::endl;
-  if (sliceSize.d[0] == -2) {
-    cout << "debug here" << endl;
+  for (int iDim = 0; iDim < sliceSize.nbDims; iDim++) {
+    if (sliceSize.d[iDim] <= 0) {
+      // AP SCAFFOLD this comes from a [:-2::] slice which TRT doesn't support
+      cout << "*** slice: negative slice sizes are not supported" << endl << flush;
+    }
+    assert(sliceSize.d[iDim] > 0);
   }
   std::cout << "*** slice: size=" << sliceSize << std::endl;
   std::cout << "*** slice: stride=" << sliceStride << std::endl;
