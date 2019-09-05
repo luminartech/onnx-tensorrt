@@ -359,12 +359,21 @@ inline nvinfer1::ITensor& convertToTensor(TensorOrWeights& input, IImporterConte
         const ShapedWeights& weights = input.weights();
         if (weights.shape.d[0] == 1 && weights.shape.nbDims > 1) {
           // AP SCAFFOLD: hack, try to detect batch=1
+          // AP SCAFFOLD Note this is coming from a Concat with a constant
+          // Because constant is encoded as a weight, but first dim ends up being 1
+          // This can also be a constant input to a convolution, also makes sense to strip dim0
+          // Seen use cases that trigger this hack:
+          // 1. concat(187, 188) (first concat in projection)
+          // 2. encoder.sep_conv1_1.conv.weight
+          // 3. id: encoder.CONVenient_block1.conv.weight 
+          // 4. concat 285, 202 (long skip from input to past last deconv and slices)
+          //
           ShapedWeights* w = (ShapedWeights*)(&weights);
           for (int iDim = 1; iDim < weights.shape.nbDims; iDim++) {
             w->shape.d[iDim-1] = w->shape.d[iDim];
           }
           w->shape.nbDims--;
-          cout << " ++++ Weights shape after fixup =" << weights.shape << endl;
+          // cout << " ++++ Weights shape after fixup =" << weights.shape << endl;
         }
         return *(ctx->network()->addConstant(weights.shape, weights)->getOutput(0));
     }
