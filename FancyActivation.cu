@@ -75,7 +75,9 @@ int FancyActivationPlugin::doEnqueue(int batchSize,
                                      max(alpha, min(beta, x))); break;
   case FLOOR:        UNARY_TRANSFORM(CAPTURE(), floorf(x)); break;
   case CEIL:         UNARY_TRANSFORM(CAPTURE(), ceilf(x)); break;
-  case THRESHOLDED_RELU: UNARY_TRANSFORM(CAPTURE(alpha), x > alpha ? x : 0); break;
+  case THRESHOLDED_RELU:
+                     UNARY_TRANSFORM(CAPTURE(alpha), x > alpha ? x : 0); break;
+  case ONE_MINUS:    UNARY_TRANSFORM(CAPTURE(alpha), 1.0 - x); break;
   default: return -1;
   }
   return cudaGetLastError() != cudaSuccess;

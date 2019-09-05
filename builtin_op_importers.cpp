@@ -666,7 +666,25 @@ DEFINE_BUILTIN_OP_IMPORTER(Cast) {
     OnnxAttrs attrs(node);
     auto cast_dtype = attrs.get<int32_t>("to");
     auto * tensor_ptr = &convertToTensor(inputs.at(0), ctx);
+    // dtype can be long, how do we pass this along?
     auto trt_dtype = tensor_ptr->getType();
+    if (trt_dtype == nvinfer1::DataType::kFLOAT &&
+        (cast_dtype == ::ONNX_NAMESPACE::TensorProto::INT64 ||
+         cast_dtype == ::ONNX_NAMESPACE::TensorProto::UINT64 ||
+         cast_dtype == ::ONNX_NAMESPACE::TensorProto::INT32 ||
+         cast_dtype == ::ONNX_NAMESPACE::TensorProto::UINT32 ||
+         cast_dtype == ::ONNX_NAMESPACE::TensorProto::INT8 ||
+         cast_dtype == ::ONNX_NAMESPACE::TensorProto::UINT8) ) {
+      cout << "ONNX2TRT warning: casting to float instead of int8/32/64! Check the graph for correctness." << endl;
+      // special case float to long conversion
+      auto layerPtr = ctx->addPluginV2(
+        new FancyActivationPlugin(FancyActivationPlugin::FLOOR),
+        {&convertToTensor(inputs.at(0), ctx)} );
+      // this will just round down instead of converting to int and keep the output as F32,
+      // so exactly representable range is 2^24
+      RETURN_FIRST_OUTPUT(layerPtr);
+    }
+
     // TensorRT only supports the following conversion: FP16 -> FP32.
     ASSERT(trt_dtype == nvinfer1::DataType::kHALF && cast_dtype == ::ONNX_NAMESPACE::TensorProto::FLOAT,
           ErrorCode::kUNSUPPORTED_NODE);
@@ -675,6 +693,25 @@ DEFINE_BUILTIN_OP_IMPORTER(Cast) {
     layer->setPrecision(nvinfer1::DataType::kFLOAT);
     RETURN_FIRST_OUTPUT(layer);
 }
+
+DEFINE_BUILTIN_OP_IMPORTER(Less) {
+  nvinfer1::ITensor* t0 = &convertToTensor(inputs.at(0), ctx);
+  nvinfer1::ITensor* t1 = &convertToTensor(inputs.at(0), ctx);
+  auto type0 = t0->getType(), type1 = t1->getType();
+  // need to return a bool but going to return a float 0.0 for False, 1.0 for True
+  return {{inputs.at(0)}};
+}
+
+DEFINE_BUILTIN_OP_IMPORTER(Not) {
+  // AP SCAFFOLD: TODO: check type
+  auto layerPtr = ctx->addPluginV2(
+    new FancyActivationPlugin(FancyActivationPlugin::FLOOR),
+    {&convertToTensor(inputs.at(0), ctx)} );
+  // this will just round down instead of converting to int and keep the output as F32,
+  // so exactly representable range is 2^24
+  RETURN_FIRST_OUTPUT(layerPtr);
+}
+
 
 DEFINE_BUILTIN_OP_IMPORTER(Clip) {
   OnnxAttrs attrs(node);
@@ -1059,6 +1096,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Flatten) {
   ASSERT(tensor_ptr, ErrorCode::kUNSUPPORTED_NODE);
   return {{tensor_ptr}};
 }
+
 
 #if NV_TENSORRT_MAJOR >= 4
 DEFINE_BUILTIN_OP_IMPORTER(Gather) {

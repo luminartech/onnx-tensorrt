@@ -34,65 +34,54 @@ using std::cerr;
 using std::endl;
 
 namespace {
-    constexpr const char* FANCY_PLUGIN_VERSION{"001"};
-    constexpr const char* FANCY_PLUGIN_NAME{"FancyActivation"};
+    constexpr const char* BINARYOP_PLUGIN_VERSION{"001"};
+    constexpr const char* BINARYOP_PLUGIN_NAME{"BinaryOp"};
 }
 
-class FancyActivationPlugin final : public onnx2trt::PluginV2 {
+class BinaryOpPlugin final : public onnx2trt::PluginV2 {
 public:
-  enum ActivationType : int {
-    LEAKY_RELU,
-    ELU,
-    SELU,
-    SOFTPLUS,
-    SOFTSIGN,
-    HARD_SIGMOID,
-    HARD_TANH,
-    CLIP,
-    FLOOR,
-    CEIL,
-    THRESHOLDED_RELU,
-    ONE_MINUS,
+  enum OpType : int {
+    LESS,
   };
 private:
-  ActivationType _activation_type;
+  OpType _op_type;
   float _alpha;
   float _beta;
 protected:
   void deserialize(void const* serialData, size_t serialLength) {
     deserializeBase(serialData, serialLength);
-    deserialize_value(&serialData, &serialLength, &_activation_type);
+    deserialize_value(&serialData, &serialLength, &_op_type);
     deserialize_value(&serialData, &serialLength, &_alpha);
     deserialize_value(&serialData, &serialLength, &_beta);
   }
   size_t getSerializationSize() const override {
-    return (serialized_size(_activation_type) +
+    return (serialized_size(_op_type) +
             serialized_size(_alpha) +
             serialized_size(_beta)) + getBaseSerializationSize();
   }
   void serialize(void *buffer) const override {
     serializeBase(buffer);
-    serialize_value(&buffer, (int)_activation_type);
+    serialize_value(&buffer, (int)_op_type);
     serialize_value(&buffer, _alpha);
     serialize_value(&buffer, _beta);
   }
 public:
-  FancyActivationPlugin(ActivationType activation_type, float alpha=0., float beta=0.)
-    : _activation_type(activation_type), _alpha(alpha), _beta(beta) {}
-  FancyActivationPlugin(void const* serialData, size_t serialLength) {
+  BinaryOpPlugin(OpType op_type, float alpha=0., float beta=0.)
+    : _op_type(op_type), _alpha(alpha), _beta(beta) {}
+  BinaryOpPlugin(void const* serialData, size_t serialLength) {
     this->deserialize(serialData, serialLength);
   }
-  virtual const char* getPluginType() const override { return FANCY_PLUGIN_NAME; }
+  virtual const char* getPluginType() const override { return BINARYOP_PLUGIN_NAME; }
 
   virtual void destroy() override { delete this; }
 
-  virtual nvinfer1::IPluginV2* clone() const override { return new FancyActivationPlugin{_activation_type, _alpha, _beta}; }
+  virtual nvinfer1::IPluginV2* clone() const override { return new BinaryOpPlugin{_op_type, _alpha, _beta}; }
 
   virtual void setPluginNamespace(const char* pluginNamespace) override {}
 
   virtual const char* getPluginNamespace() const override { return ""; }
 
-  virtual const char* getPluginVersion() const override { return FANCY_PLUGIN_VERSION; }
+  virtual const char* getPluginVersion() const override { return BINARYOP_PLUGIN_VERSION; }
 
   virtual int getNbOutputs() const override { return 1; }
   virtual nvinfer1::Dims getOutputDimensions(int index,
@@ -100,7 +89,7 @@ public:
                                              int nbInputs) override {
     assert(index == 0);
     assert(inputDims);
-    assert(nbInputs == 1);
+    assert(nbInputs == 2);
     return *inputDims;
   }
   bool supportsFormat(nvinfer1::DataType type,
@@ -116,22 +105,22 @@ public:
                 void *workspace, cudaStream_t stream);
 };
 
-class FancyActivationPluginCreator : public nvinfer1::IPluginCreator
+class BinaryOpPluginCreator : public nvinfer1::IPluginCreator
 {
 public:
-  FancyActivationPluginCreator() {}
+  BinaryOpPluginCreator() {}
 
-  ~FancyActivationPluginCreator() {}
+  ~BinaryOpPluginCreator() {}
 
-  const char* getPluginName() const { return FANCY_PLUGIN_NAME; }
+  const char* getPluginName() const { return BINARYOP_PLUGIN_NAME; }
 
-  const char* getPluginVersion() const { return FANCY_PLUGIN_VERSION; }
+  const char* getPluginVersion() const { return BINARYOP_PLUGIN_VERSION; }
 
   const nvinfer1::PluginFieldCollection* getFieldNames() { std::cerr<< "Function not implemented" << std::endl; return nullptr; }
 
   nvinfer1::IPluginV2* createPlugin(const char* name, const nvinfer1::PluginFieldCollection* fc) { std::cerr<< "Function not implemented" << std::endl; return nullptr; }
 
-  nvinfer1::IPluginV2* deserializePlugin(const char* name, const void* serialData, size_t serialLength) { return new FancyActivationPlugin{serialData, serialLength}; }
+  nvinfer1::IPluginV2* deserializePlugin(const char* name, const void* serialData, size_t serialLength) { return new BinaryOpPlugin{serialData, serialLength}; }
 
   void setPluginNamespace(const char* libNamespace) { mNamespace = libNamespace; }
 
@@ -140,4 +129,4 @@ private:
     std::string mNamespace;
 };
 
-REGISTER_TENSORRT_PLUGIN(FancyActivationPluginCreator);
+REGISTER_TENSORRT_PLUGIN(BinaryOpPluginCreator);
