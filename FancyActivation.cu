@@ -28,14 +28,7 @@
 #include <thrust/transform.h>
 #include <thrust/system/cuda/execution_policy.h>
 
-// TODO: Move this into a common header
-size_t get_num_elements(nvinfer1::Dims dims) {
-  size_t num_elements = 1;
-  for( int d=0; d<dims.nbDims; ++d ) {
-    num_elements *= dims.d[d];
-  }
-  return num_elements;
-}
+#include "CuOpHelpers.hpp"
 
 #define CAPTURE(...) [__VA_ARGS__]
 #define UNARY_TRANSFORM(capture, func) \

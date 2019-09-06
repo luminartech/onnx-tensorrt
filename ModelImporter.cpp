@@ -33,6 +33,8 @@
 
 namespace onnx2trt {
 
+using std::flush;
+
 //Status const& ModelImporter::setInput(const char* name, nvinfer1::ITensor* input) {
 //  _importer_ctx.setUserInput(name, input);
 //  _last_error = Status::success();
@@ -578,6 +580,7 @@ ModelImporter::importModel(::ONNX_NAMESPACE::ModelProto const &model,
   _current_node = -1;
   // Mark outputs defined in the ONNX model (unless tensors are user-requested)
   for( ::ONNX_NAMESPACE::ValueInfoProto const& output : graph.output() ) {
+    cout << "Marking output " << output.name() << endl << flush;
     ASSERT(tensors.count(output.name()), ErrorCode::kINVALID_GRAPH);
     ASSERT(tensors.at(output.name()).is_tensor(), ErrorCode::kUNSUPPORTED_GRAPH);
     nvinfer1::ITensor* output_tensor_ptr = &tensors.at(output.name()).tensor();
@@ -591,6 +594,7 @@ ModelImporter::importModel(::ONNX_NAMESPACE::ModelProto const &model,
     }
     nvinfer1::ITensor** user_output = _importer_ctx.getUserOutput(output.name().c_str());
     if( !user_output ) {
+      cout << "Converting output " << output.name() << endl << flush;
       _importer_ctx.network()->markOutput(*output_tensor_ptr);
       nvinfer1::DataType output_trt_dtype;
       ASSERT(convert_dtype(

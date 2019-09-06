@@ -11,6 +11,7 @@
             "program": "/home/andrei/git/test_tensorrt/trtexec",
             "args": ["--onnx=tproj.onnx", "--verbose"],
             "stopAtEntry": false,
+            
             "cwd": "/home/andrei/git/test_tensorrt",
             "environment": [],
             "externalConsole": false,
