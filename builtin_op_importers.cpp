@@ -550,6 +550,12 @@ DEFINE_BUILTIN_OP_IMPORTER(Atanh)
     return unaryHelper(ctx, node, inputs, nvinfer1::UnaryOperation::kATANH);
 }
 
+DEFINE_BUILTIN_OP_IMPORTER(Tile)
+{
+  // AP SCAFFOLD stub
+  RETURN_IDENTITY(inputs.at(0));
+}
+
 DEFINE_BUILTIN_OP_IMPORTER(AveragePool) {
   // TensorRT 5.1 only supports up to opset 9.
   ASSERT(ctx->getOpsetVersion() < 10, ErrorCode::kUNSUPPORTED_NODE);
@@ -674,6 +680,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Cast) {
          cast_dtype == ::ONNX_NAMESPACE::TensorProto::UINT64 ||
          cast_dtype == ::ONNX_NAMESPACE::TensorProto::INT32 ||
          cast_dtype == ::ONNX_NAMESPACE::TensorProto::UINT32 ||
+         cast_dtype == ::ONNX_NAMESPACE::TensorProto::BOOL ||
          cast_dtype == ::ONNX_NAMESPACE::TensorProto::INT8 ||
          cast_dtype == ::ONNX_NAMESPACE::TensorProto::UINT8) ) {
       cout << "ONNX2TRT warning: casting replaced with floor(float) instead of int8/32/64! Check the graph for correctness." << endl;
@@ -1114,12 +1121,23 @@ DEFINE_BUILTIN_OP_IMPORTER(Gather) {
     int axis = attrs.get<int>("axis", 0);
     int nbDims = inputs.at(0).shape().nbDims;
     cout << "**** Gather data.shape=" << data.getDimensions() << endl;
-    cout << "**** Gather axis, nbDims=" << axis << " " << nbDims << endl;
+    cout << "**** Gather axis, nbDims=" << axis << ", " << nbDims << endl;
 
-    // AP SCAFFOLD - sometimes axis conversion is necessary
-    TRT_CHECK(convert_axis(axis, nbDims));
-    // AP SCAFFOLD - input data is a tensor shape, not a tensor
-    // So axis conversion doesn't apply
+    // AP SCAFFOLD: this will fail for N>1
+    if (axis == 0) { // gather on batch, special case to identity assuming batch 1
+      cout << "**** WARNING: Gather on axis=0 assumed to be batch extraction, returning identity" << endl;
+      RETURN_IDENTITY(inputs.at(0));
+    }
+
+    //if (axis>0 && (axis < nbDims || (axis >= nbDims && nbDims > 2)))
+    {
+      // AP SCAFFOLD - this if above is unsafe but fixes the case of missing batch and gather on last dimension in projection
+      // AP SCAFFOLD - in another instance input data is a tensor shape, not a tensor
+      // So axis conversion doesn't apply
+      cout << "**** Gather converting axis" << endl;
+      TRT_CHECK(convert_axis(axis, nbDims));
+      cout << "**** Gather axis conversion done" << endl;
+    }
     RETURN_FIRST_OUTPUT(ctx->network()->addGather(data, indices, axis));
 }
 #endif // NV_TENSORRT_MAJOR >= 4
@@ -1991,9 +2009,17 @@ DEFINE_BUILTIN_OP_IMPORTER(Squeeze) {
   OnnxAttrs attrs(node);
   auto axes = attrs.get<std::vector<int>>("axes");
   // Note: Can't handle batch dim as it is implicit in TRT
-  if (0) // AP SCAFFOLD
+  cout << "*** Squeeze, old_shape=" << old_shape << endl;
+  if (axes[0] == 0 && axes.size() == 1) {
+    // AP SCAFFOLD - assume squeeze(0) is trying to remove batch, so return identity
+    cout << "*** Squeeze WARNING: returning identity for squeeze on zero axis" << endl;
+    RETURN_IDENTITY(inputs.at(0));
+  }
+  if (1) // AP SCAFFOLD - figure out when this works and when this breaks
   for( auto& axis : axes ) {
+    cout << "*** Squeeze, axis before conversion=" << axis << endl;
     TRT_CHECK(convert_axis(axis, ndim_in));
+    cout << "*** Squeeze, axis after conversion=" << axis << endl;
   }
   std::set<int> axes_set(axes.begin(), axes.end());
   int ndim_out = ndim_in - axes_set.size();
@@ -2005,7 +2031,7 @@ DEFINE_BUILTIN_OP_IMPORTER(Squeeze) {
     if( !axes_set.count(i) ) {
       new_shape.d[j++] = old_shape.d[i];
     } else {
-      ASSERT(old_shape.d[i] == 1, ErrorCode::kINVALID_NODE);
+      ASSERT(old_shape.d[i] == 1 && "Expected a dimension value of 1 at dimension position to squeeze", ErrorCode::kINVALID_NODE);
     }
   }
   nvinfer1::IShuffleLayer* layer = ctx->network()->addShuffle(tensor);
@@ -2081,13 +2107,21 @@ DEFINE_BUILTIN_OP_IMPORTER(Transpose) {
   nvinfer1::Permutation perm = attrs.get("perm", default_perm);
   if( input.is_tensor() ) {
     // TRT doesn't support moving the batch dim
-    ASSERT(perm.order[BATCH_DIM] == BATCH_DIM, ErrorCode::kUNSUPPORTED_NODE);
-    perm = remove_first_dim(perm);
-    // Note: Dimension types kept unchanged in order to avoid TRT complaining about CHW order
-    nvinfer1::ITensor* output_tensor =
-        transpose_tensor(ctx, input.tensor(), perm, false);
-    ASSERT(output_tensor, ErrorCode::kUNSUPPORTED_NODE);
-    return {{output_tensor}};
+    // AP SCAFFOLD: try to ignore the situation
+    //ASSERT(perm.order[BATCH_DIM] == BATCH_DIM, ErrorCode::kUNSUPPORTED_NODE);
+    if (perm.order[BATCH_DIM] != BATCH_DIM) {
+      nvinfer1::ITensor* output_tensor =
+          transpose_tensor(ctx, input.tensor(), perm, false);
+      ASSERT(output_tensor, ErrorCode::kUNSUPPORTED_NODE);
+      return {{output_tensor}};
+    } else {
+      perm = remove_first_dim(perm);
+      // Note: Dimension types kept unchanged in order to avoid TRT complaining about CHW order
+      nvinfer1::ITensor* output_tensor =
+          transpose_tensor(ctx, input.tensor(), perm, false);
+      ASSERT(output_tensor, ErrorCode::kUNSUPPORTED_NODE);
+      return {{output_tensor}};
+    }
   } else {
     auto weights = input.weights();
     auto new_weights = ctx->createTempWeights(weights.type, weights.shape);
@@ -2106,22 +2140,24 @@ DEFINE_BUILTIN_OP_IMPORTER(Unsqueeze) {
   OnnxAttrs attrs(node);
   auto axes = attrs.get<std::vector<int>>("axes");
 
-  // AP SCAFFOLD: temp hack return the input
-  return {{inputs.at(0)}};
-
   // If the input was already a tensor, then we're dealing with a TRT shape,
   // so subtract 1 from the axes. Otherwise, this is an ONNX shape.
-  cout << "*** unsq Tensor dims=" << tensor.getDimensions() << endl;
-  cout << "*** unsq axes count=" << axes.size() << endl;
+  cout << "*** unsqueeze Tensor dims=" << tensor.getDimensions() << endl;
+  cout << "*** unsqueeze axes count=" << axes.size() << endl;
   if (inputs.at(0).is_tensor())
   {
       for (auto& axis : axes)
       {
           cout << "***** unsq axis=" << axis << endl;
-          if (1) // AP SCAFFOLD - this is a shape, so no batch dim adjustment needed
+          if (axis == 0) {
+            // AP SCAFFOLD: try to support unsqueeze for single 0 axis by not adjusting the axis
+            ASSERT(axes.size() == 1, ErrorCode::kUNSUPPORTED_NODE);
+          }
+          if (ndim_in > 1 && axis != 0) // AP SCAFFOLD - unfortunately have to hack around TRT batch limitation
           {
             ASSERT(axis != BATCH_DIM, ErrorCode::kUNSUPPORTED_NODE);
             --axis;
+            cout << "***** unsq axis after decrement=" << axis << endl;
           }
       }
   }
