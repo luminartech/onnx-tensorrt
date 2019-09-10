@@ -550,8 +550,12 @@ DEFINE_BUILTIN_OP_IMPORTER(Atanh)
     return unaryHelper(ctx, node, inputs, nvinfer1::UnaryOperation::kATANH);
 }
 
-DEFINE_BUILTIN_OP_IMPORTER(Tile)
-{
+DEFINE_BUILTIN_OP_IMPORTER(Tile) {
+  // AP SCAFFOLD stub
+  RETURN_IDENTITY(inputs.at(0));
+}
+
+DEFINE_BUILTIN_OP_IMPORTER(Scatter) {
   // AP SCAFFOLD stub
   RETURN_IDENTITY(inputs.at(0));
 }
